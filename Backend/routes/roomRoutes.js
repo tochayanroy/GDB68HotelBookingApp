@@ -986,7 +986,6 @@ router.get('/admin/hotel-owners', passport.authenticate('jwt', { session: false 
             { $limit: parseInt(limit) },
             { $project: {
                 password: 0,
-                refreshToken: 0,
                 resetPasswordToken: 0,
                 resetPasswordExpiry: 0,
                 emailVerificationToken: 0,
@@ -1029,7 +1028,7 @@ router.get('/admin/hotel-owners/:ownerId', passport.authenticate('jwt', { sessio
         }
 
         const owner = await User.findById(ownerId)
-            .select('-password -refreshToken -resetPasswordToken -resetPasswordExpiry -emailVerificationToken -emailVerificationExpiry')
+            .select('-passwor -resetPasswordToken -resetPasswordExpiry -emailVerificationToken -emailVerificationExpiry')
             .populate({
                 path: 'hotels',
                 select: 'name slug status isActive starRating averageRating totalBookings totalRevenue createdAt',
@@ -1144,7 +1143,6 @@ router.patch('/admin/hotel-owners/:ownerId/status', passport.authenticate('jwt',
                 { owner: ownerId },
                 { $set: { isActive: false, status: 'SUSPENDED' } }
             );
-            updates.refreshToken = undefined;
         } else if (isBlocked === false) {
             await Hotel.updateMany(
                 { owner: ownerId, status: 'APPROVED' },
@@ -1169,7 +1167,7 @@ router.patch('/admin/hotel-owners/:ownerId/status', passport.authenticate('jwt',
             ownerId,
             { $set: updates },
             { new: true }
-        ).select('-password -refreshToken -resetPasswordToken -resetPasswordExpiry -emailVerificationToken -emailVerificationExpiry');
+        ).select('-password -resetPasswordToken -resetPasswordExpiry -emailVerificationToken -emailVerificationExpiry');
 
         res.json({
             message: 'Owner status updated successfully',
@@ -1495,7 +1493,6 @@ router.post('/admin/hotel-owners/:ownerId/suspend', passport.authenticate('jwt',
 
         owner.isActive = false;
         owner.isBlocked = true;
-        owner.refreshToken = undefined;
         owner.suspensionReason = reason || 'Suspended by SUPER_ADMIN';
         await owner.save();
 

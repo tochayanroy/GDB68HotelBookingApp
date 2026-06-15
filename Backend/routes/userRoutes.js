@@ -4,20 +4,24 @@ const bcrypt = require('bcrypt');
 const passport = require('passport');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const { uploadProfile } = require('../middleware/multer.js');
-const generateTokens = require('../utils/generateTokens.js');
+// const { uploadProfile } = require('../middleware/multer.js');
 const User = require('../models/UserSchema.js');
+
+
+
+
 
 // ==================== REGISTER USER ====================
 router.post('/register', async (req, res) => {
     try {
-        const { Name, email, password, phone, dateOfBirth, gender, role, address } = req.body;
+
+
+        const { Name, email, password, phone } = req.body;
 
         const existingUser = await User.findOne({ $or: [{ email }, { phone }] });
         if (existingUser) {
             return res.status(400).json({ error: 'User already exists with this email or phone' });
         }
-
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
 
@@ -26,28 +30,19 @@ router.post('/register', async (req, res) => {
             email,
             password: hashedPassword,
             phone,
-            dateOfBirth,
-            gender,
-            role: role || 'USER',
-            address
+            role: 'USER',
         });
-
         await user.save();
 
-        const { accessToken, refreshToken } = generateTokens(user._id, user.role);
-        
-        user.refreshToken = refreshToken;
-        await user.save();
+
+        const token = jwt.sign(user.id, process.env.JWT_SECRET);
 
         const userResponse = user.toObject();
-        delete userResponse.password;
-        delete userResponse.refreshToken;
 
         res.status(201).json({
             message: 'User registered successfully',
             user: userResponse,
-            accessToken,
-            refreshToken
+            token,
         });
     } catch (error) {
         console.error('Registration error:', error);
@@ -73,21 +68,10 @@ router.post('/login', async (req, res) => {
         if (!isMatch) {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
-
-        const { accessToken, refreshToken } = generateTokens(user._id, user.role);
-        
-        user.refreshToken = refreshToken;
-        await user.save();
-
-        const userResponse = user.toObject();
-        delete userResponse.password;
-        delete userResponse.refreshToken;
-
+    
         res.json({
             message: 'Login successful',
             user: userResponse,
-            accessToken,
-            refreshToken
         });
     } catch (error) {
         console.error('Login error:', error);
@@ -95,44 +79,6 @@ router.post('/login', async (req, res) => {
     }
 });
 
-// ==================== LOGOUT USER ====================
-router.post('/logout', passport.authenticate('jwt', { session: false }), async (req, res) => {
-    try {
-        await User.findByIdAndUpdate(req.user._id, { $unset: { refreshToken: 1 } });
-        res.json({ message: 'Logged out successfully' });
-    } catch (error) {
-        console.error('Logout error:', error);
-        res.status(500).json({ error: 'Server error during logout' });
-    }
-});
-
-// ==================== REFRESH TOKEN ====================
-router.post('/refresh-token', async (req, res) => {
-    try {
-        const { refreshToken } = req.body;
-        
-        if (!refreshToken) {
-            return res.status(401).json({ error: 'Refresh token required' });
-        }
-
-        const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
-        const user = await User.findById(decoded.userId);
-
-        if (!user || user.refreshToken !== refreshToken) {
-            return res.status(403).json({ error: 'Invalid refresh token' });
-        }
-
-        const { accessToken, refreshToken: newRefreshToken } = generateTokens(user._id, user.role);
-        
-        user.refreshToken = newRefreshToken;
-        await user.save();
-
-        res.json({ accessToken, refreshToken: newRefreshToken });
-    } catch (error) {
-        console.error('Refresh token error:', error);
-        res.status(403).json({ error: 'Invalid refresh token' });
-    }
-});
 
 // ==================== GET MY PROFILE ====================
 router.get('/profile', passport.authenticate('jwt', { session: false }), async (req, res) => {
@@ -177,26 +123,26 @@ router.put('/profile', passport.authenticate('jwt', { session: false }), async (
 });
 
 // ==================== UPDATE PROFILE IMAGE ====================
-router.put('/profile-image', passport.authenticate('jwt', { session: false }), uploadProfile.single('profileImage'), async (req, res) => {
-    try {
-        if (!req.file) {
-            return res.status(400).json({ error: 'No image file provided' });
-        }
+// router.put('/profile-image', passport.authenticate('jwt', { session: false }), uploadProfile.single('profileImage'), async (req, res) => {
+//     try {
+//         if (!req.file) {
+//             return res.status(400).json({ error: 'No image file provided' });
+//         }
 
-        const profileImageUrl = `/uploads/profiles/${req.file.filename}`;
+//         const profileImageUrl = `/uploads/profiles/${req.file.filename}`;
         
-        const user = await User.findByIdAndUpdate(
-            req.user._id,
-            { profileImage: profileImageUrl },
-            { new: true }
-        ).select('-password -refreshToken');
+//         const user = await User.findByIdAndUpdate(
+//             req.user._id,
+//             { profileImage: profileImageUrl },
+//             { new: true }
+//         ).select('-password -refreshToken');
 
-        res.json({ message: 'Profile image updated successfully', user });
-    } catch (error) {
-        console.error('Update profile image error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
+//         res.json({ message: 'Profile image updated successfully', user });
+//     } catch (error) {
+//         console.error('Update profile image error:', error);
+//         res.status(500).json({ error: 'Server error' });
+//     }
+// });
 
 // ==================== CHANGE PASSWORD ====================
 router.post('/change-password', passport.authenticate('jwt', { session: false }), async (req, res) => {
