@@ -6,7 +6,8 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 // const { uploadProfile } = require('../middleware/multer.js');
 const User = require('../models/UserSchema.js');
-
+const checkAdmin = require('../middleware/checkAdmin.js');
+const checkSuperAdmin = require('../middleware/checkSuperAdmin.js');
 
 
 
@@ -81,11 +82,9 @@ router.post('/login', async (req, res) => {
 
 
 // ==================== GET MY PROFILE ====================
-router.get('/profile', passport.authenticate('jwt', { session: false }), async (req, res) => {
+router.get('/profile', passport.authenticate('jwt', { session: false }), checkSuperAdmin, async (req, res) => {
     try {
-        const user = await User.findById(req.user._id)
-            .select('-password -refreshToken')
-            .populate('hotels', 'name location');
+        const user = await User.findById(req.user._id).select('-password')
 
         if (!user) {
             return res.status(404).json({ error: 'User not found' });

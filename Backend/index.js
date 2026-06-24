@@ -1,9 +1,12 @@
 const express = require('express');
 const app = express();
+const passport = require('passport');
 
 const dotenv = require('dotenv');
 
 const database = require('./config/Database');
+require('./middleware/passport-jwt');
+app.use(passport.initialize());
 
 const userRoutes = require('./routes/userRoutes');
 
