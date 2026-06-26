@@ -43,7 +43,7 @@ const hotelSchema = new mongoose.Schema(
         // Contact Information
         contact: {
             phone: {
-                type: String,
+                type: Number,
                 required: true,
             },
 
@@ -75,7 +75,7 @@ const hotelSchema = new mongoose.Schema(
             },
 
             zipCode: {
-                type: String,
+                type: Number,
             },
 
             addressLine: {

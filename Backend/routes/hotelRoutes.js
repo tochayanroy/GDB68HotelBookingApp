@@ -3,13 +3,54 @@ const router = express.Router();
 const passport = require('passport');
 const mongoose = require('mongoose');
 const slugify = require('slugify');
-
-const Hotel = require('../models/HotelSchema.js');
 const Room = require('../models/RoomSchema.js');
 const Review = require('../models/ReviewSchema.js');
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const User = require('../models/UserSchema.js');
+const Hotel = require('../models/HotelSchema.js');
+const Booking = require('../models/BookingSchema.js')
+const checkAdmin = require('../middleware/checkAdmin.js');
+const checkSuperAdmin = require('../middleware/checkSuperAdmin.js');
+const { handleMulterError, uploadHotelImages, uploadHotelThumbnailFlexible, uploadHotelGalleryFlexible, uploadHotelImagesFlexible } = require('../middleware/multer.js');
+const fs = require('fs');
+const path = require('path');
+
+
+
+
+
+const deleteImageFile = (imagePath) => {
+    if (!imagePath) return false;
+
+    try {
+        // Extract filename from the path
+        const filename = path.basename(imagePath);
+        const fullPath = path.join(__dirname, '../uploads/profiles/', filename);
+
+        // Check if file exists before deleting
+        if (fs.existsSync(fullPath)) {
+            fs.unlinkSync(fullPath);
+            console.log(`Deleted image: ${fullPath}`);
+            return true;
+        }
+        return false;
+    } catch (error) {
+        console.error('Error deleting image file:', error);
+        return false;
+    }
+};
+
+
+
+
+////////////////////////////////// Users //////////////////////////////////
+////////////////////////////////// Users //////////////////////////////////
+
 
 // ==================== GET ALL HOTELS ====================
-router.get('/hotels', async (req, res) => {
+router.get('/hotels', passport.authenticate('jwt', { session: false }), async (req, res) => {
     try {
         const {
             page = 1,
@@ -55,7 +96,7 @@ router.get('/hotels', async (req, res) => {
 });
 
 // ==================== GET SINGLE HOTEL ====================
-router.get('/hotels/:hotelId', async (req, res) => {
+router.get('/hotels/:hotelId', passport.authenticate('jwt', { session: false }), async (req, res) => {
     try {
         const { hotelId } = req.params;
 
@@ -85,7 +126,7 @@ router.get('/hotels/:hotelId', async (req, res) => {
 });
 
 // ==================== GET HOTEL BY SLUG ====================
-router.get('/hotels/slug/:slug', async (req, res) => {
+router.get('/hotels/slug/:slug', passport.authenticate('jwt', { session: false }), async (req, res) => {
     try {
         const { slug } = req.params;
 
@@ -112,7 +153,7 @@ router.get('/hotels/slug/:slug', async (req, res) => {
 });
 
 // ==================== SEARCH HOTELS ====================
-router.get('/hotels/search', async (req, res) => {
+router.get('/hotels/search', passport.authenticate('jwt', { session: false }), async (req, res) => {
     try {
         const {
             q,
@@ -187,8 +228,7 @@ router.get('/hotels/search', async (req, res) => {
 });
 
 // ==================== FILTER HOTELS ====================
-
-router.get('/hotels/filter', async (req, res) => {
+router.get('/hotels/filter', passport.authenticate('jwt', { session: false }), async (req, res) => {
     try {
         const {
             minStarRating,
@@ -276,7 +316,7 @@ router.get('/hotels/filter', async (req, res) => {
 });
 
 // ==================== GET FEATURED HOTELS ====================
-router.get('/hotels/featured', async (req, res) => {
+router.get('/hotels/featured', passport.authenticate('jwt', { session: false }), async (req, res) => {
     try {
         const {
             limit = 10,
@@ -305,7 +345,7 @@ router.get('/hotels/featured', async (req, res) => {
 });
 
 // ==================== GET TOP RATED HOTELS ====================
-router.get('/hotels/top-rated', async (req, res) => {
+router.get('/hotels/top-rated', passport.authenticate('jwt', { session: false }), async (req, res) => {
     try {
         const {
             limit = 10,
@@ -334,7 +374,7 @@ router.get('/hotels/top-rated', async (req, res) => {
 });
 
 // ==================== GET HOTEL ROOMS ====================
-router.get('/hotels/:hotelId/rooms', async (req, res) => {
+router.get('/hotels/:hotelId/rooms', passport.authenticate('jwt', { session: false }), async (req, res) => {
     try {
         const { hotelId } = req.params;
         const {
@@ -417,7 +457,7 @@ router.get('/hotels/:hotelId/rooms', async (req, res) => {
 });
 
 // ==================== GET HOTEL REVIEWS ====================
-router.get('/hotels/:hotelId/reviews', async (req, res) => {
+router.get('/hotels/:hotelId/reviews', passport.authenticate('jwt', { session: false }), async (req, res) => {
     try {
         const { hotelId } = req.params;
         const {
@@ -501,8 +541,24 @@ router.get('/hotels/:hotelId/reviews', async (req, res) => {
 });
 
 
+
+
+
+
+
+
+
+
+
+
+
+////////////////////////////////// Admin //////////////////////////////////
+////////////////////////////////// Admin //////////////////////////////////
+
+
+
 // ==================== GET MY HOTELS ====================
-router.get('/my-hotels', passport.authenticate('jwt', { session: false }), async (req, res) => {
+router.get('/getMyHotels', passport.authenticate('jwt', { session: false }), checkAdmin, async (req, res) => {
     try {
         const {
             page = 1,
@@ -571,7 +627,7 @@ router.get('/my-hotels', passport.authenticate('jwt', { session: false }), async
 });
 
 // ==================== CREATE HOTEL ====================
-router.post('/hotels', passport.authenticate('jwt', { session: false }), async (req, res) => {
+router.post("/createHotels", passport.authenticate("jwt", { session: false }), checkAdmin, async (req, res) => {
     try {
         const {
             name,
@@ -581,22 +637,39 @@ router.post('/hotels', passport.authenticate('jwt', { session: false }), async (
             location,
             starRating,
             amenities,
-            policies
+            policies,
+            thumbnail,
         } = req.body;
 
-        // Check if hotel with same name already exists for this owner
+        // Basic Validation
+        if (!name || !description || !contact || !address) {
+            return res.status(400).json({
+                error: "Name, description, contact and address are required.",
+            });
+        }
+
+        // Check duplicate hotel name for this owner
         const existingHotel = await Hotel.findOne({
-            name: { $regex: new RegExp(`^${name}$`, 'i') },
-            owner: req.user._id
+            name: {
+                $regex: new RegExp(`^${name}$`, "i"),
+            },
+            owner: req.user._id,
         });
 
         if (existingHotel) {
-            return res.status(400).json({ error: 'You already have a hotel with this name' });
+            return res.status(400).json({
+                error: "You already have a hotel with this name.",
+            });
         }
 
         // Generate slug
-        let slug = slugify(name, { lower: true, strict: true });
-        let slugExists = await Hotel.findOne({ slug });
+        let slug = slugify(name, {
+            lower: true,
+            strict: true,
+        });
+
+        const slugExists = await Hotel.findOne({ slug });
+
         if (slugExists) {
             slug = `${slug}-${Date.now()}`;
         }
@@ -607,97 +680,170 @@ router.post('/hotels', passport.authenticate('jwt', { session: false }), async (
             slug,
             description,
             owner: req.user._id,
-            thumbnail: req.body.thumbnail || null,
-            contact: JSON.parse(contact),
-            address: JSON.parse(address),
-            location: location ? JSON.parse(location) : { type: 'Point', coordinates: [0, 0] },
-            starRating: starRating || 3,
-            amenities: amenities || [],
-            policies: policies ? JSON.parse(policies) : {},
-            status: 'PENDING',
-            isActive: true
-        });
+            thumbnail:
+                thumbnail ||
+                "https://dummyimage.com/600x400/cccccc/000000&text=Hotel",
 
-        await hotel.save();
-
-        // Add hotel to user's hotels array
-        await User.findByIdAndUpdate(req.user._id, {
-            $push: { hotels: hotel._id }
-        });
-
-        res.status(201).json({
-            message: 'Hotel created successfully. Waiting for admin approval.',
-            hotel
-        });
-    } catch (error) {
-        console.error('Create hotel error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-// ==================== UPDATE MY HOTEL ====================
-router.put('/hotels/:hotelId', passport.authenticate('jwt', { session: false }), async (req, res) => {
-    try {
-        const { hotelId } = req.params;
-
-        if (!mongoose.Types.ObjectId.isValid(hotelId)) {
-            return res.status(400).json({ error: 'Invalid hotel ID' });
-        }
-
-        const hotel = await Hotel.findOne({ _id: hotelId, owner: req.user._id });
-
-        if (!hotel) {
-            return res.status(404).json({ error: 'Hotel not found or you are not the owner' });
-        }
-
-        // Don't allow editing if hotel is approved and pending changes
-        if (hotel.status === 'APPROVED') {
-            hotel.status = 'PENDING'; // Resubmit for approval
-        }
-
-        const {
-            name,
-            description,
             contact,
             address,
-            location,
-            starRating,
-            amenities,
-            policies,
-            isActive
-        } = req.body;
 
-        // Update slug if name changed
-        if (name && name !== hotel.name) {
-            let slug = slugify(name, { lower: true, strict: true });
-            let slugExists = await Hotel.findOne({ slug, _id: { $ne: hotelId } });
-            if (slugExists) {
-                slug = `${slug}-${Date.now()}`;
-            }
-            hotel.slug = slug;
-            hotel.name = name;
-        }
+            location:
+                location || {
+                    type: "Point",
+                    coordinates: [0, 0],
+                },
 
-        if (description) hotel.description = description;
-        if (contact) hotel.contact = JSON.parse(contact);
-        if (address) hotel.address = JSON.parse(address);
-        if (location) hotel.location = JSON.parse(location);
-        if (starRating) hotel.starRating = starRating;
-        if (amenities) hotel.amenities = amenities;
-        if (policies) hotel.policies = JSON.parse(policies);
-        if (isActive !== undefined) hotel.isActive = isActive;
+            starRating: starRating || 3,
+            amenities: amenities || [],
+            policies: policies || {},
+
+            status: "PENDING",
+            isActive: true,
+        });
 
         await hotel.save();
 
-        res.json({
-            message: 'Hotel updated successfully. Changes submitted for approval.',
-            hotel
+        // Add hotel id to user document
+        await User.findByIdAndUpdate(req.user._id, {
+            $push: {
+                hotels: hotel._id,
+            },
+        });
+
+        return res.status(201).json({
+            success: true,
+            message:
+                "Hotel created successfully. Waiting for admin approval.",
+            hotel,
         });
     } catch (error) {
-        console.error('Update hotel error:', error);
-        res.status(500).json({ error: 'Server error' });
+        console.error("Create hotel error:", error);
+
+        return res.status(500).json({
+            success: false,
+            error: error.message,
+        });
     }
-});
+}
+);
+
+// ==================== UPDATE MY HOTEL ====================
+router.put("/updateHotels/:hotelId", passport.authenticate("jwt", { session: false }), async (req, res) => {
+        try {
+            const { hotelId } = req.params;
+
+            if (!mongoose.Types.ObjectId.isValid(hotelId)) {
+                return res.status(400).json({
+                    error: "Invalid hotel ID"
+                });
+            }
+
+            const hotel = await Hotel.findOne({
+                _id: hotelId,
+                owner: req.user._id
+            });
+
+            if (!hotel) {
+                return res.status(404).json({
+                    error: "Hotel not found or you are not the owner"
+                });
+            }
+
+            // If approved, resubmit for approval
+            if (hotel.status === "APPROVED") {
+                hotel.status = "PENDING";
+            }
+
+            const {
+                name,
+                description,
+                contact,
+                address,
+                location,
+                starRating,
+                amenities,
+                policies,
+                isActive
+            } = req.body;
+
+            // Update slug if hotel name changes
+            if (name && name !== hotel.name) {
+                let slug = slugify(name, {
+                    lower: true,
+                    strict: true
+                });
+
+                const slugExists = await Hotel.findOne({
+                    slug,
+                    _id: { $ne: hotelId }
+                });
+
+                if (slugExists) {
+                    slug = `${slug}-${Date.now()}`;
+                }
+
+                hotel.name = name;
+                hotel.slug = slug;
+            }
+
+            if (description) {
+                hotel.description = description;
+            }
+
+            // Merge nested objects instead of replacing them
+            if (contact) {
+                hotel.contact = {
+                    ...hotel.contact,
+                    ...contact
+                };
+            }
+
+            if (address) {
+                hotel.address = {
+                    ...hotel.address,
+                    ...address
+                };
+            }
+
+            if (location) {
+                hotel.location = location;
+            }
+
+            if (starRating !== undefined) {
+                hotel.starRating = starRating;
+            }
+
+            if (amenities) {
+                hotel.amenities = amenities;
+            }
+
+            if (policies) {
+                hotel.policies = {
+                    ...hotel.policies,
+                    ...policies
+                };
+            }
+
+            if (isActive !== undefined) {
+                hotel.isActive = isActive;
+            }
+
+            await hotel.save();
+
+            res.json({
+                message: "Hotel updated successfully. Changes submitted for approval.",
+                hotel
+            });
+
+        } catch (error) {
+            console.error("Update hotel error:", error);
+
+            res.status(500).json({
+                error: error.message
+            });
+        }
+    }
+);
 
 // ==================== DELETE MY HOTEL ====================
 router.delete('/hotels/:hotelId', passport.authenticate('jwt', { session: false }), async (req, res) => {
@@ -743,132 +889,158 @@ router.delete('/hotels/:hotelId', passport.authenticate('jwt', { session: false 
     }
 });
 
-// ==================== UPLOAD HOTEL THUMBNAIL ====================
-router.post('/hotels/:hotelId/thumbnail',
-    passport.authenticate('jwt', { session: false }),
-    uploadHotelThumbnail.single('thumbnail'),
-    async (req, res) => {
+// ==================== UPLOAD HOTEL IMAGES ====================
+router.post('/uploadHotelsImage/:hotelId', passport.authenticate('jwt', { session: false }), uploadHotelThumbnailFlexible, handleMulterError, async (req, res) => {
         try {
             const { hotelId } = req.params;
 
             if (!mongoose.Types.ObjectId.isValid(hotelId)) {
-                return res.status(400).json({ error: 'Invalid hotel ID' });
+                return res.status(400).json({ success: false, error: 'Invalid hotel ID' });
             }
 
             if (!req.file) {
-                return res.status(400).json({ error: 'No thumbnail file provided' });
+                return res.status(400).json({ success: false, error: 'No thumbnail file provided' });
             }
 
             const hotel = await Hotel.findOne({ _id: hotelId, owner: req.user._id });
 
             if (!hotel) {
-                return res.status(404).json({ error: 'Hotel not found or you are not the owner' });
+                return res.status(404).json({ success: false, error: 'Hotel not found or you are not the owner' });
             }
 
-            // Delete old thumbnail if exists
-            if (hotel.thumbnail) {
-                const oldThumbnailPath = path.join(__dirname, '..', hotel.thumbnail);
-                if (fs.existsSync(oldThumbnailPath)) {
-                    fs.unlinkSync(oldThumbnailPath);
-                }
-            }
-
+            // Update thumbnail
             const thumbnailUrl = `/uploads/hotels/thumbnails/${req.file.filename}`;
             hotel.thumbnail = thumbnailUrl;
             await hotel.save();
 
             res.json({
+                success: true,
                 message: 'Hotel thumbnail uploaded successfully',
-                thumbnail: thumbnailUrl
+                thumbnail: hotel.thumbnail
             });
         } catch (error) {
             console.error('Upload thumbnail error:', error);
-            res.status(500).json({ error: 'Server error' });
+            res.status(500).json({ success: false, error: 'Server error' });
         }
     }
 );
 
-// ==================== UPLOAD HOTEL IMAGES ====================
-router.post('/hotels/:hotelId/images',
-    passport.authenticate('jwt', { session: false }),
-    uploadHotelImages.array('images', 10),
-    async (req, res) => {
+// Upload hotel gallery images (multiple images)
+router.post('/uploadHotelsgalleryImages/:hotelId', passport.authenticate('jwt', { session: false }), uploadHotelGalleryFlexible, handleMulterError, async (req, res) => {
         try {
             const { hotelId } = req.params;
 
             if (!mongoose.Types.ObjectId.isValid(hotelId)) {
-                return res.status(400).json({ error: 'Invalid hotel ID' });
+                return res.status(400).json({ success: false, error: 'Invalid hotel ID' });
             }
 
             if (!req.files || req.files.length === 0) {
-                return res.status(400).json({ error: 'No image files provided' });
+                return res.status(400).json({ success: false, error: 'No gallery images provided' });
             }
 
             const hotel = await Hotel.findOne({ _id: hotelId, owner: req.user._id });
 
             if (!hotel) {
-                return res.status(404).json({ error: 'Hotel not found or you are not the owner' });
+                return res.status(404).json({ success: false, error: 'Hotel not found or you are not the owner' });
             }
 
-            const imageUrls = req.files.map(file => `/uploads/hotels/images/${file.filename}`);
+            const imageUrls = req.files.map(file => `/uploads/hotels/gallery/${file.filename}`);
             hotel.images.push(...imageUrls);
             await hotel.save();
 
             res.json({
-                message: `${imageUrls.length} images uploaded successfully`,
+                success: true,
+                message: `${imageUrls.length} gallery images uploaded successfully`,
                 images: hotel.images
             });
         } catch (error) {
-            console.error('Upload images error:', error);
-            res.status(500).json({ error: 'Server error' });
+            console.error('Upload gallery error:', error);
+            res.status(500).json({ success: false, error: 'Server error' });
         }
     }
 );
 
-// ==================== DELETE HOTEL IMAGE ====================
-router.delete('/hotels/:hotelId/images',
-    passport.authenticate('jwt', { session: false }),
-    async (req, res) => {
+// Upload both hotel thumbnail and gallery together
+router.post('/hotels/:hotelId/images', passport.authenticate('jwt', { session: false }), uploadHotelImagesFlexible, handleMulterError, async (req, res) => {
         try {
             const { hotelId } = req.params;
-            const { imageUrl } = req.body;
 
             if (!mongoose.Types.ObjectId.isValid(hotelId)) {
-                return res.status(400).json({ error: 'Invalid hotel ID' });
-            }
-
-            if (!imageUrl) {
-                return res.status(400).json({ error: 'Image URL is required' });
+                return res.status(400).json({ success: false, error: 'Invalid hotel ID' });
             }
 
             const hotel = await Hotel.findOne({ _id: hotelId, owner: req.user._id });
 
             if (!hotel) {
-                return res.status(404).json({ error: 'Hotel not found or you are not the owner' });
+                return res.status(404).json({ success: false, error: 'Hotel not found or you are not the owner' });
             }
 
-            // Remove from images array
-            const imageIndex = hotel.images.indexOf(imageUrl);
-            if (imageIndex === -1) {
-                return res.status(404).json({ error: 'Image not found in hotel gallery' });
+            const thumbnail = req.files?.hotelThumbnail?.[0] || req.files?.thumbnail?.[0];
+            const gallery = req.files?.hotelGallery || req.files?.gallery || [];
+
+            if (!thumbnail && gallery.length === 0) {
+                return res.status(400).json({ success: false, error: 'No images provided' });
             }
 
-            hotel.images.splice(imageIndex, 1);
+            // Update thumbnail if provided
+            if (thumbnail) {
+                hotel.thumbnail = `/uploads/hotels/thumbnails/${thumbnail.filename}`;
+            }
+
+            // Add gallery images if provided
+            if (gallery.length > 0) {
+                const galleryUrls = gallery.map(file => `/uploads/hotels/gallery/${file.filename}`);
+                hotel.images.push(...galleryUrls);
+            }
+
             await hotel.save();
 
-            // Delete file from filesystem
-            const imagePath = path.join(__dirname, '..', imageUrl);
-            if (fs.existsSync(imagePath)) {
-                fs.unlinkSync(imagePath);
+            res.json({
+                success: true,
+                message: 'Hotel images uploaded successfully',
+                data: {
+                    thumbnail: hotel.thumbnail,
+                    gallery: hotel.images
+                }
+            });
+        } catch (error) {
+            console.error('Upload images error:', error);
+            res.status(500).json({ success: false, error: 'Server error' });
+        }
+    }
+);
+
+router.delete('/deleteHotelgalleryImage/:hotelId/:imageIndex', passport.authenticate('jwt', { session: false }), async (req, res) => {
+        try {
+            const { hotelId, imageIndex } = req.params;
+
+            if (!mongoose.Types.ObjectId.isValid(hotelId)) {
+                return res.status(400).json({ success: false, error: 'Invalid hotel ID' });
             }
 
+            const hotel = await Hotel.findOne({ _id: hotelId, owner: req.user._id });
+
+            if (!hotel) {
+                return res.status(404).json({ success: false, error: 'Hotel not found or you are not the owner' });
+            }
+
+            const index = parseInt(imageIndex);
+            if (index < 0 || index >= hotel.images.length) {
+                return res.status(400).json({ success: false, error: 'Invalid image index' });
+            }
+
+            // Remove image URL from array
+            hotel.images.splice(index, 1);
+            await hotel.save();
+
             res.json({
+                success: true,
                 message: 'Image deleted successfully',
                 images: hotel.images
             });
         } catch (error) {
             console.error('Delete image error:', error);
-            res.status(500).json({ error: 'Server error' });
+            res.status(500).json({ success: false, error: 'Server error' });
         }
     }
 );
@@ -1167,6 +1339,25 @@ router.get('/hotels/:hotelId/reviews', passport.authenticate('jwt', { session: f
         res.status(500).json({ error: 'Server error' });
     }
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+////////////////////////////////// Super Admin //////////////////////////////////
+////////////////////////////////// Super Admin //////////////////////////////////
+
+
 
 // ==================== GET ALL HOTELS (Admin) ====================
 router.get('/admin/hotels', passport.authenticate('jwt', { session: false }), async (req, res) => {
@@ -3562,7 +3753,7 @@ router.get('/admin/hotel-owners/statistics', passport.authenticate('jwt', { sess
 });
 
 // ==================== SUSPEND HOTEL OWNER ====================
-router.post('/admin/hotel-owners/:ownerId/suspend', passport.authenticate('jwt', { session: false }), async (req, res) => {
+router.post('/suspendHotelOwner/:ownerId', passport.authenticate('jwt', { session: false }), async (req, res) => {
     try {
         // Only SUPER_ADMIN can suspend owners
         if (req.user.role !== 'SUPER_ADMIN') {
@@ -3633,7 +3824,7 @@ router.post('/admin/hotel-owners/:ownerId/suspend', passport.authenticate('jwt',
 });
 
 // ==================== UNSUSPEND HOTEL OWNER ====================
-router.post('/admin/hotel-owners/:ownerId/unsuspend', passport.authenticate('jwt', { session: false }), async (req, res) => {
+router.post('/unsuspendhotelOwner/:ownerId', passport.authenticate('jwt', { session: false }), async (req, res) => {
     try {
         // Only SUPER_ADMIN can unsuspend owners
         if (req.user.role !== 'SUPER_ADMIN') {

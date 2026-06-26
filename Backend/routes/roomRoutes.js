@@ -7,6 +7,48 @@ const Room = require('../models/RoomSchema.js');
 const Hotel = require('../models/HotelSchema.js');
 const Booking = require('../models/BookingSchema.js');
 
+
+
+
+async function checkRoomAvailability(roomId, checkIn, checkOut, availableRooms) {
+    const bookings = await Booking.find({
+        room: roomId,
+        status: { $in: ['CONFIRMED', 'CHECKED_IN'] },
+        $or: [
+            { checkIn: { $lte: checkOut, $gte: checkIn } },
+            { checkOut: { $lte: checkOut, $gte: checkIn } }
+        ]
+    });
+
+    const bookedCount = bookings.reduce((sum, booking) => sum + booking.numberOfRooms, 0);
+    return (availableRooms - bookedCount) > 0;
+}
+
+async function getBookedRoomsCount(roomId, checkIn, checkOut) {
+    const bookings = await Booking.find({
+        room: roomId,
+        status: { $in: ['CONFIRMED', 'CHECKED_IN'] },
+        $or: [
+            { checkIn: { $lte: checkOut, $gte: checkIn } },
+            { checkOut: { $lte: checkOut, $gte: checkIn } }
+        ]
+    });
+
+    return bookings.reduce((sum, booking) => sum + booking.numberOfRooms, 0);
+}
+
+
+
+
+
+
+
+
+////////////////////////// User //////////////////////////
+////////////////////////// User //////////////////////////
+
+
+
 // ==================== GET ALL ROOMS ====================
 router.get('/rooms', async (req, res) => {
     try {
@@ -704,6 +746,25 @@ router.get('/rooms/top-rated', async (req, res) => {
 });
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+////////////////////////// Admin //////////////////////////
+////////////////////////// Admin //////////////////////////
+
+
 // ==================== REMOVE ROOM AMENITIES ====================
 router.delete('/rooms/:roomId/amenities', passport.authenticate('jwt', { session: false }), async (req, res) => {
     try {
@@ -871,761 +932,6 @@ router.post('/rooms/bulk-remove-amenities', passport.authenticate('jwt', { sessi
     }
 });
 
-// ==================== GET ALL HOTEL OWNERS ====================
-router.get('/admin/hotel-owners', passport.authenticate('jwt', { session: false }), async (req, res) => {
-    try {
-        // Only SUPER_ADMIN and ADMIN can view hotel owners
-        if (req.user.role !== 'SUPER_ADMIN' && req.user.role !== 'ADMIN') {
-            return res.status(403).json({ error: 'Access denied. Admin only.' });
-        }
-
-        const {
-            page = 1,
-            limit = 10,
-            search,
-            sortBy = 'totalHotels',
-            sortOrder = 'desc',
-            isActive,
-            isVerified
-        } = req.query;
-
-        const matchStage = { hotels: { $exists: true, $ne: [] } };
-        
-        if (isActive !== undefined) matchStage.isActive = isActive === 'true';
-        if (isVerified !== undefined) matchStage.isVerified = isVerified === 'true';
-        
-        if (search) {
-            matchStage.$or = [
-                { Name: { $regex: search, $options: 'i' } },
-                { email: { $regex: search, $options: 'i' } },
-                { phone: { $regex: search, $options: 'i' } }
-            ];
-        }
-
-        const pipeline = [
-            { $match: matchStage },
-            { $lookup: {
-                from: 'hotels',
-                localField: 'hotels',
-                foreignField: '_id',
-                as: 'hotelDetails'
-            }},
-            { $addFields: {
-                totalHotels: { $size: '$hotelDetails' },
-                approvedHotels: {
-                    $size: {
-                        $filter: {
-                            input: '$hotelDetails',
-                            cond: { $eq: ['$$this.status', 'APPROVED'] }
-                        }
-                    }
-                },
-                pendingHotels: {
-                    $size: {
-                        $filter: {
-                            input: '$hotelDetails',
-                            cond: { $eq: ['$$this.status', 'PENDING'] }
-                        }
-                    }
-                },
-                rejectedHotels: {
-                    $size: {
-                        $filter: {
-                            input: '$hotelDetails',
-                            cond: { $eq: ['$$this.status', 'REJECTED'] }
-                        }
-                    }
-                },
-                suspendedHotels: {
-                    $size: {
-                        $filter: {
-                            input: '$hotelDetails',
-                            cond: { $eq: ['$$this.status', 'SUSPENDED'] }
-                        }
-                    }
-                },
-                activeHotels: {
-                    $size: {
-                        $filter: {
-                            input: '$hotelDetails',
-                            cond: { $eq: ['$$this.isActive', true] }
-                        }
-                    }
-                },
-                totalRevenue: {
-                    $sum: {
-                        $map: {
-                            input: '$hotelDetails',
-                            as: 'hotel',
-                            in: { $ifNull: ['$$hotel.totalRevenue', 0] }
-                        }
-                    }
-                },
-                totalBookings: {
-                    $sum: {
-                        $map: {
-                            input: '$hotelDetails',
-                            as: 'hotel',
-                            in: { $ifNull: ['$$hotel.totalBookings', 0] }
-                        }
-                    }
-                },
-                totalRooms: {
-                    $sum: {
-                        $map: {
-                            input: '$hotelDetails',
-                            as: 'hotel',
-                            in: { $size: { $ifNull: ['$$hotel.rooms', []] } }
-                        }
-                    }
-                },
-                averageHotelRating: { $avg: '$hotelDetails.averageRating' }
-            }},
-            { $sort: { [sortBy]: sortOrder === 'desc' ? -1 : 1 } },
-            { $skip: (parseInt(page) - 1) * parseInt(limit) },
-            { $limit: parseInt(limit) },
-            { $project: {
-                password: 0,
-                resetPasswordToken: 0,
-                resetPasswordExpiry: 0,
-                emailVerificationToken: 0,
-                emailVerificationExpiry: 0
-            }}
-        ];
-
-        const [owners, totalCount] = await Promise.all([
-            User.aggregate(pipeline),
-            User.countDocuments(matchStage)
-        ]);
-
-        res.json({
-            owners,
-            pagination: {
-                currentPage: parseInt(page),
-                totalPages: Math.ceil(totalCount / parseInt(limit)),
-                totalOwners: totalCount,
-                limit: parseInt(limit)
-            }
-        });
-    } catch (error) {
-        console.error('Get hotel owners error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-// ==================== GET SINGLE HOTEL OWNER DETAILS ====================
-router.get('/admin/hotel-owners/:ownerId', passport.authenticate('jwt', { session: false }), async (req, res) => {
-    try {
-        // Only SUPER_ADMIN and ADMIN can view hotel owner details
-        if (req.user.role !== 'SUPER_ADMIN' && req.user.role !== 'ADMIN') {
-            return res.status(403).json({ error: 'Access denied. Admin only.' });
-        }
-
-        const { ownerId } = req.params;
-
-        if (!mongoose.Types.ObjectId.isValid(ownerId)) {
-            return res.status(400).json({ error: 'Invalid owner ID' });
-        }
-
-        const owner = await User.findById(ownerId)
-            .select('-passwor -resetPasswordToken -resetPasswordExpiry -emailVerificationToken -emailVerificationExpiry')
-            .populate({
-                path: 'hotels',
-                select: 'name slug status isActive starRating averageRating totalBookings totalRevenue createdAt',
-                options: { sort: { createdAt: -1 } }
-            });
-
-        if (!owner) {
-            return res.status(404).json({ error: 'Owner not found' });
-        }
-
-        // Get additional statistics
-        const hotels = owner.hotels;
-        const totalHotels = hotels.length;
-        const approvedHotels = hotels.filter(h => h.status === 'APPROVED').length;
-        const pendingHotels = hotels.filter(h => h.status === 'PENDING').length;
-        const rejectedHotels = hotels.filter(h => h.status === 'REJECTED').length;
-        const suspendedHotels = hotels.filter(h => h.status === 'SUSPENDED').length;
-        const activeHotels = hotels.filter(h => h.isActive === true).length;
-        
-        const totalRevenue = hotels.reduce((sum, h) => sum + (h.totalRevenue || 0), 0);
-        const totalBookings = hotels.reduce((sum, h) => sum + (h.totalBookings || 0), 0);
-        const averageRating = hotels.reduce((sum, h) => sum + (h.averageRating || 0), 0) / (totalHotels || 1);
-
-        // Get recent bookings across all owner's hotels
-        const hotelIds = hotels.map(h => h._id);
-        const recentBookings = await Booking.find({ hotel: { $in: hotelIds } })
-            .populate('user', 'Name email')
-            .populate('hotel', 'name')
-            .sort('-createdAt')
-            .limit(10);
-
-        // Get recent reviews
-        const recentReviews = await Review.find({ hotel: { $in: hotelIds } })
-            .populate('user', 'Name')
-            .populate('hotel', 'name')
-            .sort('-createdAt')
-            .limit(10);
-
-        const ownerStats = {
-            totalHotels,
-            approvedHotels,
-            pendingHotels,
-            rejectedHotels,
-            suspendedHotels,
-            activeHotels,
-            totalRevenue,
-            totalBookings,
-            averageRating: averageRating.toFixed(2),
-            completionRate: totalHotels > 0 ? ((approvedHotels / totalHotels) * 100).toFixed(1) : 0
-        };
-
-        res.json({
-            owner: {
-                _id: owner._id,
-                Name: owner.Name,
-                email: owner.email,
-                phone: owner.phone,
-                profileImage: owner.profileImage,
-                businessInfo: owner.businessInfo,
-                address: owner.address,
-                isActive: owner.isActive,
-                isVerified: owner.isVerified,
-                createdAt: owner.createdAt,
-                updatedAt: owner.updatedAt
-            },
-            statistics: ownerStats,
-            hotels: owner.hotels,
-            recentActivity: {
-                recentBookings,
-                recentReviews
-            }
-        });
-    } catch (error) {
-        console.error('Get single hotel owner error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-// ==================== UPDATE HOTEL OWNER STATUS ====================
-router.patch('/admin/hotel-owners/:ownerId/status', passport.authenticate('jwt', { session: false }), async (req, res) => {
-    try {
-        // Only SUPER_ADMIN can update owner status
-        if (req.user.role !== 'SUPER_ADMIN') {
-            return res.status(403).json({ error: 'Access denied. SUPER_ADMIN only.' });
-        }
-
-        const { ownerId } = req.params;
-        const { isActive, isVerified, isBlocked } = req.body;
-
-        if (!mongoose.Types.ObjectId.isValid(ownerId)) {
-            return res.status(400).json({ error: 'Invalid owner ID' });
-        }
-
-        const owner = await User.findById(ownerId);
-        
-        if (!owner) {
-            return res.status(404).json({ error: 'Owner not found' });
-        }
-
-        const updates = {};
-        if (isActive !== undefined) updates.isActive = isActive;
-        if (isVerified !== undefined) updates.isVerified = isVerified;
-        if (isBlocked !== undefined) updates.isBlocked = isBlocked;
-
-        if (Object.keys(updates).length === 0) {
-            return res.status(400).json({ error: 'No updates provided' });
-        }
-
-        // If blocking, also block all hotels
-        if (isBlocked === true) {
-            await Hotel.updateMany(
-                { owner: ownerId },
-                { $set: { isActive: false, status: 'SUSPENDED' } }
-            );
-        } else if (isBlocked === false) {
-            await Hotel.updateMany(
-                { owner: ownerId, status: 'APPROVED' },
-                { $set: { isActive: true } }
-            );
-        }
-
-        // If deactivating, also deactivate all hotels
-        if (isActive === false) {
-            await Hotel.updateMany(
-                { owner: ownerId },
-                { $set: { isActive: false } }
-            );
-        } else if (isActive === true && isBlocked !== true) {
-            await Hotel.updateMany(
-                { owner: ownerId, status: 'APPROVED' },
-                { $set: { isActive: true } }
-            );
-        }
-
-        const updatedOwner = await User.findByIdAndUpdate(
-            ownerId,
-            { $set: updates },
-            { new: true }
-        ).select('-password -resetPasswordToken -resetPasswordExpiry -emailVerificationToken -emailVerificationExpiry');
-
-        res.json({
-            message: 'Owner status updated successfully',
-            owner: updatedOwner
-        });
-    } catch (error) {
-        console.error('Update hotel owner status error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-// ==================== GET HOTEL OWNER PERFORMANCE ====================
-router.get('/admin/hotel-owners/:ownerId/performance', passport.authenticate('jwt', { session: false }), async (req, res) => {
-    try {
-        // Only SUPER_ADMIN and ADMIN can view owner performance
-        if (req.user.role !== 'SUPER_ADMIN' && req.user.role !== 'ADMIN') {
-            return res.status(403).json({ error: 'Access denied. Admin only.' });
-        }
-
-        const { ownerId } = req.params;
-        const { startDate, endDate } = req.query;
-
-        if (!mongoose.Types.ObjectId.isValid(ownerId)) {
-            return res.status(400).json({ error: 'Invalid owner ID' });
-        }
-
-        const owner = await User.findById(ownerId).populate('hotels');
-        
-        if (!owner) {
-            return res.status(404).json({ error: 'Owner not found' });
-        }
-
-        const hotelIds = owner.hotels.map(h => h._id);
-        
-        const dateFilter = {};
-        if (startDate) dateFilter.$gte = new Date(startDate);
-        if (endDate) dateFilter.$lte = new Date(endDate);
-
-        const [
-            totalBookings,
-            completedBookings,
-            cancelledBookings,
-            totalRevenue,
-            monthlyRevenue,
-            monthlyBookings,
-            averageRating,
-            totalReviews,
-            topPerformingHotel,
-            worstPerformingHotel,
-            bookingTrends
-        ] = await Promise.all([
-            Booking.countDocuments({ hotel: { $in: hotelIds } }),
-            Booking.countDocuments({ hotel: { $in: hotelIds }, status: 'COMPLETED' }),
-            Booking.countDocuments({ hotel: { $in: hotelIds }, status: 'CANCELLED' }),
-            Booking.aggregate([
-                { $match: { hotel: { $in: hotelIds }, status: 'COMPLETED', ...dateFilter } },
-                { $group: { _id: null, total: { $sum: '$totalPrice' } } }
-            ]),
-            Booking.aggregate([
-                { $match: { hotel: { $in: hotelIds }, status: 'COMPLETED', ...dateFilter } },
-                { $group: {
-                    _id: { year: { $year: '$createdAt' }, month: { $month: '$createdAt' } },
-                    revenue: { $sum: '$totalPrice' }
-                }},
-                { $sort: { '_id.year': -1, '_id.month': -1 } },
-                { $limit: 6 }
-            ]),
-            Booking.aggregate([
-                { $match: { hotel: { $in: hotelIds }, ...dateFilter } },
-                { $group: {
-                    _id: { year: { $year: '$createdAt' }, month: { $month: '$createdAt' } },
-                    count: { $sum: 1 }
-                }},
-                { $sort: { '_id.year': -1, '_id.month': -1 } },
-                { $limit: 6 }
-            ]),
-            Review.aggregate([
-                { $match: { hotel: { $in: hotelIds } } },
-                { $group: { _id: null, avg: { $avg: '$rating' } } }
-            ]),
-            Review.countDocuments({ hotel: { $in: hotelIds } }),
-            Hotel.findOne({ owner: ownerId, status: 'APPROVED' })
-                .sort({ totalBookings: -1 })
-                .select('name totalBookings totalRevenue averageRating'),
-            Hotel.findOne({ owner: ownerId, status: 'APPROVED', totalBookings: { $gt: 0 } })
-                .sort({ totalBookings: 1 })
-                .select('name totalBookings totalRevenue averageRating'),
-            Booking.aggregate([
-                { $match: { hotel: { $in: hotelIds }, ...dateFilter } },
-                { $group: {
-                    _id: { month: { $month: '$createdAt' }, week: { $week: '$createdAt' } },
-                    bookings: { $sum: 1 },
-                    revenue: { $sum: '$totalPrice' }
-                }},
-                { $sort: { '_id.month': 1, '_id.week': 1 } }
-            ])
-        ]);
-
-        const completionRate = totalBookings > 0 ? (completedBookings / totalBookings * 100).toFixed(1) : 0;
-        const cancellationRate = totalBookings > 0 ? (cancelledBookings / totalBookings * 100).toFixed(1) : 0;
-
-        res.json({
-            owner: {
-                _id: owner._id,
-                Name: owner.Name,
-                email: owner.email,
-                businessInfo: owner.businessInfo
-            },
-            summary: {
-                totalHotels: owner.hotels.length,
-                totalBookings,
-                completedBookings,
-                cancelledBookings,
-                completionRate: parseFloat(completionRate),
-                cancellationRate: parseFloat(cancellationRate),
-                totalRevenue: totalRevenue[0]?.total || 0,
-                averageRating: averageRating[0]?.avg.toFixed(2) || 0,
-                totalReviews
-            },
-            performance: {
-                topPerformingHotel,
-                worstPerformingHotel,
-                monthlyRevenue,
-                monthlyBookings,
-                bookingTrends
-            },
-            period: {
-                startDate: startDate || 'All time',
-                endDate: endDate || 'Present'
-            }
-        });
-    } catch (error) {
-        console.error('Get hotel owner performance error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-// ==================== GET ALL HOTEL OWNERS STATISTICS ====================
-router.get('/admin/hotel-owners/statistics', passport.authenticate('jwt', { session: false }), async (req, res) => {
-    try {
-        // Only SUPER_ADMIN can view owner statistics
-        if (req.user.role !== 'SUPER_ADMIN') {
-            return res.status(403).json({ error: 'Access denied. SUPER_ADMIN only.' });
-        }
-
-        const [
-            totalOwners,
-            activeOwners,
-            inactiveOwners,
-            blockedOwners,
-            verifiedOwners,
-            unverifiedOwners,
-            ownersWithHotels,
-            ownersByHotelCount,
-            totalRevenueByOwners,
-            topOwnersByRevenue,
-            topOwnersByHotels,
-            ownersGrowthTrend,
-            averageHotelsPerOwner
-        ] = await Promise.all([
-            User.countDocuments({ hotels: { $exists: true, $ne: [] } }),
-            User.countDocuments({ hotels: { $exists: true, $ne: [] }, isActive: true }),
-            User.countDocuments({ hotels: { $exists: true, $ne: [] }, isActive: false }),
-            User.countDocuments({ hotels: { $exists: true, $ne: [] }, isBlocked: true }),
-            User.countDocuments({ hotels: { $exists: true, $ne: [] }, isVerified: true }),
-            User.countDocuments({ hotels: { $exists: true, $ne: [] }, isVerified: false }),
-            User.countDocuments({ hotels: { $exists: true, $ne: [] } }),
-            User.aggregate([
-                { $match: { hotels: { $exists: true, $ne: [] } } },
-                { $project: { hotelCount: { $size: '$hotels' } } },
-                { $group: {
-                    _id: '$hotelCount',
-                    count: { $sum: 1 }
-                }},
-                { $sort: { _id: 1 } }
-            ]),
-            User.aggregate([
-                { $match: { hotels: { $exists: true, $ne: [] } } },
-                { $lookup: {
-                    from: 'hotels',
-                    localField: 'hotels',
-                    foreignField: '_id',
-                    as: 'hotelDetails'
-                }},
-                { $addFields: {
-                    totalRevenue: {
-                        $sum: {
-                            $map: {
-                                input: '$hotelDetails',
-                                as: 'hotel',
-                                in: { $ifNull: ['$$hotel.totalRevenue', 0] }
-                            }
-                        }
-                    }
-                }},
-                { $group: {
-                    _id: null,
-                    total: { $sum: '$totalRevenue' },
-                    avg: { $avg: '$totalRevenue' }
-                }}
-            ]),
-            User.aggregate([
-                { $match: { hotels: { $exists: true, $ne: [] } } },
-                { $lookup: {
-                    from: 'hotels',
-                    localField: 'hotels',
-                    foreignField: '_id',
-                    as: 'hotelDetails'
-                }},
-                { $addFields: {
-                    totalRevenue: {
-                        $sum: {
-                            $map: {
-                                input: '$hotelDetails',
-                                as: 'hotel',
-                                in: { $ifNull: ['$$hotel.totalRevenue', 0] }
-                            }
-                        }
-                    },
-                    totalBookings: {
-                        $sum: {
-                            $map: {
-                                input: '$hotelDetails',
-                                as: 'hotel',
-                                in: { $ifNull: ['$$hotel.totalBookings', 0] }
-                            }
-                        }
-                    }
-                }},
-                { $sort: { totalRevenue: -1 } },
-                { $limit: 10 },
-                { $project: { Name: 1, email: 1, totalRevenue: 1, totalBookings: 1, hotels: 1 } }
-            ]),
-            User.aggregate([
-                { $match: { hotels: { $exists: true, $ne: [] } } },
-                { $project: { Name: 1, email: 1, hotelCount: { $size: '$hotels' } } },
-                { $sort: { hotelCount: -1 } },
-                { $limit: 10 }
-            ]),
-            User.aggregate([
-                { $match: { hotels: { $exists: true, $ne: [] } } },
-                { $group: {
-                    _id: { year: { $year: '$createdAt' }, month: { $month: '$createdAt' } },
-                    count: { $sum: 1 }
-                }},
-                { $sort: { '_id.year': -1, '_id.month': -1 } },
-                { $limit: 12 }
-            ]),
-            User.aggregate([
-                { $match: { hotels: { $exists: true, $ne: [] } } },
-                { $group: { _id: null, avg: { $avg: { $size: '$hotels' } } } }
-            ])
-        ]);
-
-        const activePercentage = totalOwners > 0 ? (activeOwners / totalOwners * 100).toFixed(1) : 0;
-        const verifiedPercentage = totalOwners > 0 ? (verifiedOwners / totalOwners * 100).toFixed(1) : 0;
-
-        res.json({
-            overview: {
-                totalOwners,
-                activeOwners,
-                inactiveOwners,
-                blockedOwners,
-                verifiedOwners,
-                unverifiedOwners,
-                activePercentage: parseFloat(activePercentage),
-                verifiedPercentage: parseFloat(verifiedPercentage),
-                averageHotelsPerOwner: averageHotelsPerOwner[0]?.avg.toFixed(2) || 0
-            },
-            distribution: {
-                ownersByHotelCount,
-                ownersGrowthTrend
-            },
-            financial: {
-                totalRevenueGenerated: totalRevenueByOwners[0]?.total || 0,
-                averageRevenuePerOwner: totalRevenueByOwners[0]?.avg.toFixed(2) || 0
-            },
-            leaders: {
-                topOwnersByRevenue,
-                topOwnersByHotels
-            },
-            generatedAt: new Date()
-        });
-    } catch (error) {
-        console.error('Get hotel owners statistics error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-// ==================== SUSPEND HOTEL OWNER ====================
-router.post('/admin/hotel-owners/:ownerId/suspend', passport.authenticate('jwt', { session: false }), async (req, res) => {
-    try {
-        // Only SUPER_ADMIN can suspend owners
-        if (req.user.role !== 'SUPER_ADMIN') {
-            return res.status(403).json({ error: 'Access denied. SUPER_ADMIN only.' });
-        }
-
-        const { ownerId } = req.params;
-        const { reason } = req.body;
-
-        if (!mongoose.Types.ObjectId.isValid(ownerId)) {
-            return res.status(400).json({ error: 'Invalid owner ID' });
-        }
-
-        const owner = await User.findById(ownerId);
-        
-        if (!owner) {
-            return res.status(404).json({ error: 'Owner not found' });
-        }
-
-        // Check for active bookings across all hotels
-        const hotelIds = owner.hotels;
-        const activeBookings = await Booking.countDocuments({
-            hotel: { $in: hotelIds },
-            status: { $in: ['CONFIRMED', 'CHECKED_IN'] }
-        });
-
-        if (activeBookings > 0) {
-            return res.status(400).json({ 
-                error: `Cannot suspend owner with ${activeBookings} active bookings across their hotels` 
-            });
-        }
-
-        owner.isActive = false;
-        owner.isBlocked = true;
-        owner.suspensionReason = reason || 'Suspended by SUPER_ADMIN';
-        await owner.save();
-
-        // Suspend all hotels
-        await Hotel.updateMany(
-            { owner: ownerId },
-            { $set: { isActive: false, status: 'SUSPENDED', suspensionReason: reason || 'Owner suspended' } }
-        );
-
-        // Suspend all rooms
-        const rooms = await Room.find({ hotel: { $in: hotelIds } });
-        for (const room of rooms) {
-            room.isActive = false;
-            room.status = 'INACTIVE';
-            room.availableRooms = 0;
-            await room.save();
-        }
-
-        res.json({
-            message: 'Hotel owner suspended successfully',
-            owner: {
-                _id: owner._id,
-                Name: owner.Name,
-                email: owner.email,
-                isActive: owner.isActive,
-                isBlocked: owner.isBlocked,
-                suspensionReason: owner.suspensionReason
-            }
-        });
-    } catch (error) {
-        console.error('Suspend hotel owner error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-// ==================== UNSUSPEND HOTEL OWNER ====================
-router.post('/admin/hotel-owners/:ownerId/unsuspend', passport.authenticate('jwt', { session: false }), async (req, res) => {
-    try {
-        // Only SUPER_ADMIN can unsuspend owners
-        if (req.user.role !== 'SUPER_ADMIN') {
-            return res.status(403).json({ error: 'Access denied. SUPER_ADMIN only.' });
-        }
-
-        const { ownerId } = req.params;
-
-        if (!mongoose.Types.ObjectId.isValid(ownerId)) {
-            return res.status(400).json({ error: 'Invalid owner ID' });
-        }
-
-        const owner = await User.findById(ownerId);
-        
-        if (!owner) {
-            return res.status(404).json({ error: 'Owner not found' });
-        }
-
-        owner.isActive = true;
-        owner.isBlocked = false;
-        owner.suspensionReason = undefined;
-        await owner.save();
-
-        // Unsuspend all approved hotels
-        await Hotel.updateMany(
-            { owner: ownerId, status: 'APPROVED' },
-            { $set: { isActive: true, status: 'APPROVED', suspensionReason: undefined } }
-        );
-
-        // Unsuspend all rooms in approved hotels
-        const hotels = await Hotel.find({ owner: ownerId, status: 'APPROVED' });
-        const hotelIds = hotels.map(h => h._id);
-        
-        await Room.updateMany(
-            { hotel: { $in: hotelIds } },
-            { $set: { isActive: true, status: 'AVAILABLE' } }
-        );
-
-        res.json({
-            message: 'Hotel owner unsuspended successfully',
-            owner: {
-                _id: owner._id,
-                Name: owner.Name,
-                email: owner.email,
-                isActive: owner.isActive,
-                isBlocked: owner.isBlocked
-            }
-        });
-    } catch (error) {
-        console.error('Unsuspend hotel owner error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-
-// ==================== HELPER FUNCTIONS ====================
-
-async function checkRoomAvailability(roomId, checkIn, checkOut, availableRooms) {
-    const bookings = await Booking.find({
-        room: roomId,
-        status: { $in: ['CONFIRMED', 'CHECKED_IN'] },
-        $or: [
-            { checkIn: { $lte: checkOut, $gte: checkIn } },
-            { checkOut: { $lte: checkOut, $gte: checkIn } }
-        ]
-    });
-
-    const bookedCount = bookings.reduce((sum, booking) => sum + booking.numberOfRooms, 0);
-    return (availableRooms - bookedCount) > 0;
-}
-
-async function getBookedRoomsCount(roomId, checkIn, checkOut) {
-    const bookings = await Booking.find({
-        room: roomId,
-        status: { $in: ['CONFIRMED', 'CHECKED_IN'] },
-        $or: [
-            { checkIn: { $lte: checkOut, $gte: checkIn } },
-            { checkOut: { $lte: checkOut, $gte: checkIn } }
-        ]
-    });
-
-    return bookings.reduce((sum, booking) => sum + booking.numberOfRooms, 0);
-}
-
-const express = require('express');
-const router = express.Router();
-const passport = require('passport');
-const mongoose = require('mongoose');
-const fs = require('fs');
-const path = require('path');
-
-const Room = require('../models/roomSchema.js');
-const Hotel = require('../models/hotelSchema.js');
-const Booking = require('../models/bookingSchema.js');
-const Review = require('../models/reviewSchema.js');
-const { uploadRoomImages, uploadRoomThumbnail } = require('../middleware/multer.js');
 
 // ==================== CREATE ROOM ====================
 router.post('/hotels/:hotelId/rooms', passport.authenticate('jwt', { session: false }), async (req, res) => {
@@ -4741,6 +4047,735 @@ router.post('/admin/rooms/manage-status', passport.authenticate('jwt', { session
         });
     } catch (error) {
         console.error('Manage room status error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+
+
+
+
+
+
+
+
+
+
+
+////////////////////////// Super Admin //////////////////////////
+////////////////////////// Super Admin //////////////////////////
+
+
+
+// ==================== GET ALL HOTEL OWNERS ====================
+router.get('/admin/hotel-owners', passport.authenticate('jwt', { session: false }), async (req, res) => {
+    try {
+        // Only SUPER_ADMIN and ADMIN can view hotel owners
+        if (req.user.role !== 'SUPER_ADMIN' && req.user.role !== 'ADMIN') {
+            return res.status(403).json({ error: 'Access denied. Admin only.' });
+        }
+
+        const {
+            page = 1,
+            limit = 10,
+            search,
+            sortBy = 'totalHotels',
+            sortOrder = 'desc',
+            isActive,
+            isVerified
+        } = req.query;
+
+        const matchStage = { hotels: { $exists: true, $ne: [] } };
+        
+        if (isActive !== undefined) matchStage.isActive = isActive === 'true';
+        if (isVerified !== undefined) matchStage.isVerified = isVerified === 'true';
+        
+        if (search) {
+            matchStage.$or = [
+                { Name: { $regex: search, $options: 'i' } },
+                { email: { $regex: search, $options: 'i' } },
+                { phone: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        const pipeline = [
+            { $match: matchStage },
+            { $lookup: {
+                from: 'hotels',
+                localField: 'hotels',
+                foreignField: '_id',
+                as: 'hotelDetails'
+            }},
+            { $addFields: {
+                totalHotels: { $size: '$hotelDetails' },
+                approvedHotels: {
+                    $size: {
+                        $filter: {
+                            input: '$hotelDetails',
+                            cond: { $eq: ['$$this.status', 'APPROVED'] }
+                        }
+                    }
+                },
+                pendingHotels: {
+                    $size: {
+                        $filter: {
+                            input: '$hotelDetails',
+                            cond: { $eq: ['$$this.status', 'PENDING'] }
+                        }
+                    }
+                },
+                rejectedHotels: {
+                    $size: {
+                        $filter: {
+                            input: '$hotelDetails',
+                            cond: { $eq: ['$$this.status', 'REJECTED'] }
+                        }
+                    }
+                },
+                suspendedHotels: {
+                    $size: {
+                        $filter: {
+                            input: '$hotelDetails',
+                            cond: { $eq: ['$$this.status', 'SUSPENDED'] }
+                        }
+                    }
+                },
+                activeHotels: {
+                    $size: {
+                        $filter: {
+                            input: '$hotelDetails',
+                            cond: { $eq: ['$$this.isActive', true] }
+                        }
+                    }
+                },
+                totalRevenue: {
+                    $sum: {
+                        $map: {
+                            input: '$hotelDetails',
+                            as: 'hotel',
+                            in: { $ifNull: ['$$hotel.totalRevenue', 0] }
+                        }
+                    }
+                },
+                totalBookings: {
+                    $sum: {
+                        $map: {
+                            input: '$hotelDetails',
+                            as: 'hotel',
+                            in: { $ifNull: ['$$hotel.totalBookings', 0] }
+                        }
+                    }
+                },
+                totalRooms: {
+                    $sum: {
+                        $map: {
+                            input: '$hotelDetails',
+                            as: 'hotel',
+                            in: { $size: { $ifNull: ['$$hotel.rooms', []] } }
+                        }
+                    }
+                },
+                averageHotelRating: { $avg: '$hotelDetails.averageRating' }
+            }},
+            { $sort: { [sortBy]: sortOrder === 'desc' ? -1 : 1 } },
+            { $skip: (parseInt(page) - 1) * parseInt(limit) },
+            { $limit: parseInt(limit) },
+            { $project: {
+                password: 0,
+                resetPasswordToken: 0,
+                resetPasswordExpiry: 0,
+                emailVerificationToken: 0,
+                emailVerificationExpiry: 0
+            }}
+        ];
+
+        const [owners, totalCount] = await Promise.all([
+            User.aggregate(pipeline),
+            User.countDocuments(matchStage)
+        ]);
+
+        res.json({
+            owners,
+            pagination: {
+                currentPage: parseInt(page),
+                totalPages: Math.ceil(totalCount / parseInt(limit)),
+                totalOwners: totalCount,
+                limit: parseInt(limit)
+            }
+        });
+    } catch (error) {
+        console.error('Get hotel owners error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// ==================== GET SINGLE HOTEL OWNER DETAILS ====================
+router.get('/admin/hotel-owners/:ownerId', passport.authenticate('jwt', { session: false }), async (req, res) => {
+    try {
+        // Only SUPER_ADMIN and ADMIN can view hotel owner details
+        if (req.user.role !== 'SUPER_ADMIN' && req.user.role !== 'ADMIN') {
+            return res.status(403).json({ error: 'Access denied. Admin only.' });
+        }
+
+        const { ownerId } = req.params;
+
+        if (!mongoose.Types.ObjectId.isValid(ownerId)) {
+            return res.status(400).json({ error: 'Invalid owner ID' });
+        }
+
+        const owner = await User.findById(ownerId)
+            .select('-passwor -resetPasswordToken -resetPasswordExpiry -emailVerificationToken -emailVerificationExpiry')
+            .populate({
+                path: 'hotels',
+                select: 'name slug status isActive starRating averageRating totalBookings totalRevenue createdAt',
+                options: { sort: { createdAt: -1 } }
+            });
+
+        if (!owner) {
+            return res.status(404).json({ error: 'Owner not found' });
+        }
+
+        // Get additional statistics
+        const hotels = owner.hotels;
+        const totalHotels = hotels.length;
+        const approvedHotels = hotels.filter(h => h.status === 'APPROVED').length;
+        const pendingHotels = hotels.filter(h => h.status === 'PENDING').length;
+        const rejectedHotels = hotels.filter(h => h.status === 'REJECTED').length;
+        const suspendedHotels = hotels.filter(h => h.status === 'SUSPENDED').length;
+        const activeHotels = hotels.filter(h => h.isActive === true).length;
+        
+        const totalRevenue = hotels.reduce((sum, h) => sum + (h.totalRevenue || 0), 0);
+        const totalBookings = hotels.reduce((sum, h) => sum + (h.totalBookings || 0), 0);
+        const averageRating = hotels.reduce((sum, h) => sum + (h.averageRating || 0), 0) / (totalHotels || 1);
+
+        // Get recent bookings across all owner's hotels
+        const hotelIds = hotels.map(h => h._id);
+        const recentBookings = await Booking.find({ hotel: { $in: hotelIds } })
+            .populate('user', 'Name email')
+            .populate('hotel', 'name')
+            .sort('-createdAt')
+            .limit(10);
+
+        // Get recent reviews
+        const recentReviews = await Review.find({ hotel: { $in: hotelIds } })
+            .populate('user', 'Name')
+            .populate('hotel', 'name')
+            .sort('-createdAt')
+            .limit(10);
+
+        const ownerStats = {
+            totalHotels,
+            approvedHotels,
+            pendingHotels,
+            rejectedHotels,
+            suspendedHotels,
+            activeHotels,
+            totalRevenue,
+            totalBookings,
+            averageRating: averageRating.toFixed(2),
+            completionRate: totalHotels > 0 ? ((approvedHotels / totalHotels) * 100).toFixed(1) : 0
+        };
+
+        res.json({
+            owner: {
+                _id: owner._id,
+                Name: owner.Name,
+                email: owner.email,
+                phone: owner.phone,
+                profileImage: owner.profileImage,
+                businessInfo: owner.businessInfo,
+                address: owner.address,
+                isActive: owner.isActive,
+                isVerified: owner.isVerified,
+                createdAt: owner.createdAt,
+                updatedAt: owner.updatedAt
+            },
+            statistics: ownerStats,
+            hotels: owner.hotels,
+            recentActivity: {
+                recentBookings,
+                recentReviews
+            }
+        });
+    } catch (error) {
+        console.error('Get single hotel owner error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// ==================== UPDATE HOTEL OWNER STATUS ====================
+router.patch('/admin/hotel-owners/:ownerId/status', passport.authenticate('jwt', { session: false }), async (req, res) => {
+    try {
+        // Only SUPER_ADMIN can update owner status
+        if (req.user.role !== 'SUPER_ADMIN') {
+            return res.status(403).json({ error: 'Access denied. SUPER_ADMIN only.' });
+        }
+
+        const { ownerId } = req.params;
+        const { isActive, isVerified, isBlocked } = req.body;
+
+        if (!mongoose.Types.ObjectId.isValid(ownerId)) {
+            return res.status(400).json({ error: 'Invalid owner ID' });
+        }
+
+        const owner = await User.findById(ownerId);
+        
+        if (!owner) {
+            return res.status(404).json({ error: 'Owner not found' });
+        }
+
+        const updates = {};
+        if (isActive !== undefined) updates.isActive = isActive;
+        if (isVerified !== undefined) updates.isVerified = isVerified;
+        if (isBlocked !== undefined) updates.isBlocked = isBlocked;
+
+        if (Object.keys(updates).length === 0) {
+            return res.status(400).json({ error: 'No updates provided' });
+        }
+
+        // If blocking, also block all hotels
+        if (isBlocked === true) {
+            await Hotel.updateMany(
+                { owner: ownerId },
+                { $set: { isActive: false, status: 'SUSPENDED' } }
+            );
+        } else if (isBlocked === false) {
+            await Hotel.updateMany(
+                { owner: ownerId, status: 'APPROVED' },
+                { $set: { isActive: true } }
+            );
+        }
+
+        // If deactivating, also deactivate all hotels
+        if (isActive === false) {
+            await Hotel.updateMany(
+                { owner: ownerId },
+                { $set: { isActive: false } }
+            );
+        } else if (isActive === true && isBlocked !== true) {
+            await Hotel.updateMany(
+                { owner: ownerId, status: 'APPROVED' },
+                { $set: { isActive: true } }
+            );
+        }
+
+        const updatedOwner = await User.findByIdAndUpdate(
+            ownerId,
+            { $set: updates },
+            { new: true }
+        ).select('-password -resetPasswordToken -resetPasswordExpiry -emailVerificationToken -emailVerificationExpiry');
+
+        res.json({
+            message: 'Owner status updated successfully',
+            owner: updatedOwner
+        });
+    } catch (error) {
+        console.error('Update hotel owner status error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// ==================== GET HOTEL OWNER PERFORMANCE ====================
+router.get('/admin/hotel-owners/:ownerId/performance', passport.authenticate('jwt', { session: false }), async (req, res) => {
+    try {
+        // Only SUPER_ADMIN and ADMIN can view owner performance
+        if (req.user.role !== 'SUPER_ADMIN' && req.user.role !== 'ADMIN') {
+            return res.status(403).json({ error: 'Access denied. Admin only.' });
+        }
+
+        const { ownerId } = req.params;
+        const { startDate, endDate } = req.query;
+
+        if (!mongoose.Types.ObjectId.isValid(ownerId)) {
+            return res.status(400).json({ error: 'Invalid owner ID' });
+        }
+
+        const owner = await User.findById(ownerId).populate('hotels');
+        
+        if (!owner) {
+            return res.status(404).json({ error: 'Owner not found' });
+        }
+
+        const hotelIds = owner.hotels.map(h => h._id);
+        
+        const dateFilter = {};
+        if (startDate) dateFilter.$gte = new Date(startDate);
+        if (endDate) dateFilter.$lte = new Date(endDate);
+
+        const [
+            totalBookings,
+            completedBookings,
+            cancelledBookings,
+            totalRevenue,
+            monthlyRevenue,
+            monthlyBookings,
+            averageRating,
+            totalReviews,
+            topPerformingHotel,
+            worstPerformingHotel,
+            bookingTrends
+        ] = await Promise.all([
+            Booking.countDocuments({ hotel: { $in: hotelIds } }),
+            Booking.countDocuments({ hotel: { $in: hotelIds }, status: 'COMPLETED' }),
+            Booking.countDocuments({ hotel: { $in: hotelIds }, status: 'CANCELLED' }),
+            Booking.aggregate([
+                { $match: { hotel: { $in: hotelIds }, status: 'COMPLETED', ...dateFilter } },
+                { $group: { _id: null, total: { $sum: '$totalPrice' } } }
+            ]),
+            Booking.aggregate([
+                { $match: { hotel: { $in: hotelIds }, status: 'COMPLETED', ...dateFilter } },
+                { $group: {
+                    _id: { year: { $year: '$createdAt' }, month: { $month: '$createdAt' } },
+                    revenue: { $sum: '$totalPrice' }
+                }},
+                { $sort: { '_id.year': -1, '_id.month': -1 } },
+                { $limit: 6 }
+            ]),
+            Booking.aggregate([
+                { $match: { hotel: { $in: hotelIds }, ...dateFilter } },
+                { $group: {
+                    _id: { year: { $year: '$createdAt' }, month: { $month: '$createdAt' } },
+                    count: { $sum: 1 }
+                }},
+                { $sort: { '_id.year': -1, '_id.month': -1 } },
+                { $limit: 6 }
+            ]),
+            Review.aggregate([
+                { $match: { hotel: { $in: hotelIds } } },
+                { $group: { _id: null, avg: { $avg: '$rating' } } }
+            ]),
+            Review.countDocuments({ hotel: { $in: hotelIds } }),
+            Hotel.findOne({ owner: ownerId, status: 'APPROVED' })
+                .sort({ totalBookings: -1 })
+                .select('name totalBookings totalRevenue averageRating'),
+            Hotel.findOne({ owner: ownerId, status: 'APPROVED', totalBookings: { $gt: 0 } })
+                .sort({ totalBookings: 1 })
+                .select('name totalBookings totalRevenue averageRating'),
+            Booking.aggregate([
+                { $match: { hotel: { $in: hotelIds }, ...dateFilter } },
+                { $group: {
+                    _id: { month: { $month: '$createdAt' }, week: { $week: '$createdAt' } },
+                    bookings: { $sum: 1 },
+                    revenue: { $sum: '$totalPrice' }
+                }},
+                { $sort: { '_id.month': 1, '_id.week': 1 } }
+            ])
+        ]);
+
+        const completionRate = totalBookings > 0 ? (completedBookings / totalBookings * 100).toFixed(1) : 0;
+        const cancellationRate = totalBookings > 0 ? (cancelledBookings / totalBookings * 100).toFixed(1) : 0;
+
+        res.json({
+            owner: {
+                _id: owner._id,
+                Name: owner.Name,
+                email: owner.email,
+                businessInfo: owner.businessInfo
+            },
+            summary: {
+                totalHotels: owner.hotels.length,
+                totalBookings,
+                completedBookings,
+                cancelledBookings,
+                completionRate: parseFloat(completionRate),
+                cancellationRate: parseFloat(cancellationRate),
+                totalRevenue: totalRevenue[0]?.total || 0,
+                averageRating: averageRating[0]?.avg.toFixed(2) || 0,
+                totalReviews
+            },
+            performance: {
+                topPerformingHotel,
+                worstPerformingHotel,
+                monthlyRevenue,
+                monthlyBookings,
+                bookingTrends
+            },
+            period: {
+                startDate: startDate || 'All time',
+                endDate: endDate || 'Present'
+            }
+        });
+    } catch (error) {
+        console.error('Get hotel owner performance error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// ==================== GET ALL HOTEL OWNERS STATISTICS ====================
+router.get('/admin/hotel-owners/statistics', passport.authenticate('jwt', { session: false }), async (req, res) => {
+    try {
+        // Only SUPER_ADMIN can view owner statistics
+        if (req.user.role !== 'SUPER_ADMIN') {
+            return res.status(403).json({ error: 'Access denied. SUPER_ADMIN only.' });
+        }
+
+        const [
+            totalOwners,
+            activeOwners,
+            inactiveOwners,
+            blockedOwners,
+            verifiedOwners,
+            unverifiedOwners,
+            ownersWithHotels,
+            ownersByHotelCount,
+            totalRevenueByOwners,
+            topOwnersByRevenue,
+            topOwnersByHotels,
+            ownersGrowthTrend,
+            averageHotelsPerOwner
+        ] = await Promise.all([
+            User.countDocuments({ hotels: { $exists: true, $ne: [] } }),
+            User.countDocuments({ hotels: { $exists: true, $ne: [] }, isActive: true }),
+            User.countDocuments({ hotels: { $exists: true, $ne: [] }, isActive: false }),
+            User.countDocuments({ hotels: { $exists: true, $ne: [] }, isBlocked: true }),
+            User.countDocuments({ hotels: { $exists: true, $ne: [] }, isVerified: true }),
+            User.countDocuments({ hotels: { $exists: true, $ne: [] }, isVerified: false }),
+            User.countDocuments({ hotels: { $exists: true, $ne: [] } }),
+            User.aggregate([
+                { $match: { hotels: { $exists: true, $ne: [] } } },
+                { $project: { hotelCount: { $size: '$hotels' } } },
+                { $group: {
+                    _id: '$hotelCount',
+                    count: { $sum: 1 }
+                }},
+                { $sort: { _id: 1 } }
+            ]),
+            User.aggregate([
+                { $match: { hotels: { $exists: true, $ne: [] } } },
+                { $lookup: {
+                    from: 'hotels',
+                    localField: 'hotels',
+                    foreignField: '_id',
+                    as: 'hotelDetails'
+                }},
+                { $addFields: {
+                    totalRevenue: {
+                        $sum: {
+                            $map: {
+                                input: '$hotelDetails',
+                                as: 'hotel',
+                                in: { $ifNull: ['$$hotel.totalRevenue', 0] }
+                            }
+                        }
+                    }
+                }},
+                { $group: {
+                    _id: null,
+                    total: { $sum: '$totalRevenue' },
+                    avg: { $avg: '$totalRevenue' }
+                }}
+            ]),
+            User.aggregate([
+                { $match: { hotels: { $exists: true, $ne: [] } } },
+                { $lookup: {
+                    from: 'hotels',
+                    localField: 'hotels',
+                    foreignField: '_id',
+                    as: 'hotelDetails'
+                }},
+                { $addFields: {
+                    totalRevenue: {
+                        $sum: {
+                            $map: {
+                                input: '$hotelDetails',
+                                as: 'hotel',
+                                in: { $ifNull: ['$$hotel.totalRevenue', 0] }
+                            }
+                        }
+                    },
+                    totalBookings: {
+                        $sum: {
+                            $map: {
+                                input: '$hotelDetails',
+                                as: 'hotel',
+                                in: { $ifNull: ['$$hotel.totalBookings', 0] }
+                            }
+                        }
+                    }
+                }},
+                { $sort: { totalRevenue: -1 } },
+                { $limit: 10 },
+                { $project: { Name: 1, email: 1, totalRevenue: 1, totalBookings: 1, hotels: 1 } }
+            ]),
+            User.aggregate([
+                { $match: { hotels: { $exists: true, $ne: [] } } },
+                { $project: { Name: 1, email: 1, hotelCount: { $size: '$hotels' } } },
+                { $sort: { hotelCount: -1 } },
+                { $limit: 10 }
+            ]),
+            User.aggregate([
+                { $match: { hotels: { $exists: true, $ne: [] } } },
+                { $group: {
+                    _id: { year: { $year: '$createdAt' }, month: { $month: '$createdAt' } },
+                    count: { $sum: 1 }
+                }},
+                { $sort: { '_id.year': -1, '_id.month': -1 } },
+                { $limit: 12 }
+            ]),
+            User.aggregate([
+                { $match: { hotels: { $exists: true, $ne: [] } } },
+                { $group: { _id: null, avg: { $avg: { $size: '$hotels' } } } }
+            ])
+        ]);
+
+        const activePercentage = totalOwners > 0 ? (activeOwners / totalOwners * 100).toFixed(1) : 0;
+        const verifiedPercentage = totalOwners > 0 ? (verifiedOwners / totalOwners * 100).toFixed(1) : 0;
+
+        res.json({
+            overview: {
+                totalOwners,
+                activeOwners,
+                inactiveOwners,
+                blockedOwners,
+                verifiedOwners,
+                unverifiedOwners,
+                activePercentage: parseFloat(activePercentage),
+                verifiedPercentage: parseFloat(verifiedPercentage),
+                averageHotelsPerOwner: averageHotelsPerOwner[0]?.avg.toFixed(2) || 0
+            },
+            distribution: {
+                ownersByHotelCount,
+                ownersGrowthTrend
+            },
+            financial: {
+                totalRevenueGenerated: totalRevenueByOwners[0]?.total || 0,
+                averageRevenuePerOwner: totalRevenueByOwners[0]?.avg.toFixed(2) || 0
+            },
+            leaders: {
+                topOwnersByRevenue,
+                topOwnersByHotels
+            },
+            generatedAt: new Date()
+        });
+    } catch (error) {
+        console.error('Get hotel owners statistics error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// ==================== SUSPEND HOTEL OWNER ====================
+router.post('/admin/hotel-owners/:ownerId/suspend', passport.authenticate('jwt', { session: false }), async (req, res) => {
+    try {
+        // Only SUPER_ADMIN can suspend owners
+        if (req.user.role !== 'SUPER_ADMIN') {
+            return res.status(403).json({ error: 'Access denied. SUPER_ADMIN only.' });
+        }
+
+        const { ownerId } = req.params;
+        const { reason } = req.body;
+
+        if (!mongoose.Types.ObjectId.isValid(ownerId)) {
+            return res.status(400).json({ error: 'Invalid owner ID' });
+        }
+
+        const owner = await User.findById(ownerId);
+        
+        if (!owner) {
+            return res.status(404).json({ error: 'Owner not found' });
+        }
+
+        // Check for active bookings across all hotels
+        const hotelIds = owner.hotels;
+        const activeBookings = await Booking.countDocuments({
+            hotel: { $in: hotelIds },
+            status: { $in: ['CONFIRMED', 'CHECKED_IN'] }
+        });
+
+        if (activeBookings > 0) {
+            return res.status(400).json({ 
+                error: `Cannot suspend owner with ${activeBookings} active bookings across their hotels` 
+            });
+        }
+
+        owner.isActive = false;
+        owner.isBlocked = true;
+        owner.suspensionReason = reason || 'Suspended by SUPER_ADMIN';
+        await owner.save();
+
+        // Suspend all hotels
+        await Hotel.updateMany(
+            { owner: ownerId },
+            { $set: { isActive: false, status: 'SUSPENDED', suspensionReason: reason || 'Owner suspended' } }
+        );
+
+        // Suspend all rooms
+        const rooms = await Room.find({ hotel: { $in: hotelIds } });
+        for (const room of rooms) {
+            room.isActive = false;
+            room.status = 'INACTIVE';
+            room.availableRooms = 0;
+            await room.save();
+        }
+
+        res.json({
+            message: 'Hotel owner suspended successfully',
+            owner: {
+                _id: owner._id,
+                Name: owner.Name,
+                email: owner.email,
+                isActive: owner.isActive,
+                isBlocked: owner.isBlocked,
+                suspensionReason: owner.suspensionReason
+            }
+        });
+    } catch (error) {
+        console.error('Suspend hotel owner error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// ==================== UNSUSPEND HOTEL OWNER ====================
+router.post('/admin/hotel-owners/:ownerId/unsuspend', passport.authenticate('jwt', { session: false }), async (req, res) => {
+    try {
+        // Only SUPER_ADMIN can unsuspend owners
+        if (req.user.role !== 'SUPER_ADMIN') {
+            return res.status(403).json({ error: 'Access denied. SUPER_ADMIN only.' });
+        }
+
+        const { ownerId } = req.params;
+
+        if (!mongoose.Types.ObjectId.isValid(ownerId)) {
+            return res.status(400).json({ error: 'Invalid owner ID' });
+        }
+
+        const owner = await User.findById(ownerId);
+        
+        if (!owner) {
+            return res.status(404).json({ error: 'Owner not found' });
+        }
+
+        owner.isActive = true;
+        owner.isBlocked = false;
+        owner.suspensionReason = undefined;
+        await owner.save();
+
+        // Unsuspend all approved hotels
+        await Hotel.updateMany(
+            { owner: ownerId, status: 'APPROVED' },
+            { $set: { isActive: true, status: 'APPROVED', suspensionReason: undefined } }
+        );
+
+        // Unsuspend all rooms in approved hotels
+        const hotels = await Hotel.find({ owner: ownerId, status: 'APPROVED' });
+        const hotelIds = hotels.map(h => h._id);
+        
+        await Room.updateMany(
+            { hotel: { $in: hotelIds } },
+            { $set: { isActive: true, status: 'AVAILABLE' } }
+        );
+
+        res.json({
+            message: 'Hotel owner unsuspended successfully',
+            owner: {
+                _id: owner._id,
+                Name: owner.Name,
+                email: owner.email,
+                isActive: owner.isActive,
+                isBlocked: owner.isBlocked
+            }
+        });
+    } catch (error) {
+        console.error('Unsuspend hotel owner error:', error);
         res.status(500).json({ error: 'Server error' });
     }
 });
