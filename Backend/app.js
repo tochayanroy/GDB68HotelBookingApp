@@ -10,14 +10,17 @@ app.use(passport.initialize());
 
 const userRoutes = require('./routes/userRoutes');
 const hotelRoutes = require('./routes/hotelRoutes');
-// const roomRoutes = require('./routes/roomRoutes');
+const roomRoutes = require('./routes/roomRoutes');
+const notificationRoutes = require('./routes/notificationRoutes');
+
 
 app.use(express.json());
 dotenv.config();
 
 app.use('/users', userRoutes);
 app.use('/hotels', hotelRoutes);
-// app.use('/rooms', roomRoutes);
+app.use('/rooms', roomRoutes);
+app.use('/notification', notificationRoutes);
 
 app.listen(process.env.PORT, () => {
     console.log(`Server is running on port ${process.env.PORT}`);

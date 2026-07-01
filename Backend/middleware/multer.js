@@ -59,6 +59,10 @@ const storage = multer.diskStorage({
     }
 });
 
+
+
+
+
 // File filter function for images only
 const fileFilter = (req, file, cb) => {
     // Allow only image files
@@ -258,3 +262,4 @@ module.exports = {
     // Error handler
     handleMulterError
 };
+

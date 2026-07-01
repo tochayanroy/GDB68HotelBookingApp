@@ -6,6 +6,7 @@ const mongoose = require('mongoose');
 const Room = require('../models/RoomSchema.js');
 const Hotel = require('../models/HotelSchema.js');
 const Booking = require('../models/BookingSchema.js');
+const { handleMulterError, uploadRoomThumbnail, uploadRoomGallery, uploadRoomThumbnailFlexible, uploadRoomGalleryFlexible, uploadRoomImages, uploadRoomImagesFlexible, } = require('../middleware/multer.js');
 
 
 
@@ -36,7 +37,6 @@ async function getBookedRoomsCount(roomId, checkIn, checkOut) {
 
     return bookings.reduce((sum, booking) => sum + booking.numberOfRooms, 0);
 }
-
 
 
 
@@ -1309,7 +1309,7 @@ router.get('/my-rooms/:roomId', passport.authenticate('jwt', { session: false })
 // ==================== UPLOAD ROOM THUMBNAIL ====================
 router.post('/rooms/:roomId/thumbnail',
     passport.authenticate('jwt', { session: false }),
-    uploadRoomThumbnail.single('thumbnail'),
+    uploadRoomThumbnail,
     async (req, res) => {
         try {
             const { roomId } = req.params;
@@ -1359,7 +1359,7 @@ router.post('/rooms/:roomId/thumbnail',
 // ==================== UPLOAD ROOM IMAGES ====================
 router.post('/rooms/:roomId/images',
     passport.authenticate('jwt', { session: false }),
-    uploadRoomImages.array('images', 10),
+    uploadRoomImages,
     async (req, res) => {
         try {
             const { roomId } = req.params;
